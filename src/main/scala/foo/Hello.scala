@@ -1,25 +1,46 @@
 package foo
 
+import java.nio.file.Paths
+
+import scala.util.matching.Regex
+
 object Hello extends App {
   import Args._
 
   case class Config(
       foo: String,
       num: Int,
-      kalle: Option[Int],
-      lst: Seq[String]
+      list: Seq[Int],
+      path: java.nio.file.Path,
+      file: java.io.File,
+      maybe: Option[Int]
   )
 
-  implicit def seqConvert[T](implicit base: Convert[T]): Convert[Seq[T]] = Convert { src =>
-    val a = src.split(',').map(base.convert)
-    a.foldLeft[Option[Seq[T]]](Some(Seq())) {
-      case (Some(s), Some(e)) => Some(s :+ e)
-      case _                  => None
-    }
-  }
+  val c1 = parse[Config](
+    List("--num=123",
+         "--foo=hello",
+         "an arg",
+         "--maybe=3",
+         "--list=1,23,2",
+         "--path=/path/to/path",
+         "--file=/path/to/file"))
 
-  val c = parse[Config](List("--num=123", "--foo=hej", "arg1", "--kalle=3", "--lst=a,b,cd"))
-  println(c)
+  val c2 = parse[Config](List("--foo=hej", "--num=x", "--list=a,b,cd"))
+
+  show(c1)
+  show(c2)
+  def show(result: Result[Config]) = result match {
+    case Ok(config, rest) =>
+      println(s"config: $config")
+      println(s"rest: $rest")
+
+    case Fail(errors, _) =>
+      println("Parameter failure:")
+      println(errors.mkString("  ", "\n  ", ""))
+      println("Parameters:")
+      println(help[Config].mkString("  ", "\n  ", ""))
+
+  }
 
 }
 
@@ -34,92 +55,185 @@ object Hello extends App {
 
 object Args {
 
-  import scala.util.Try
+  import scala.util.{Try, Failure, Success}
   import shapeless._
 
-  def flag(name: String, s: String): Either[String, String] = {
-    val pattern = s"--$name=(\\S+)".r
-    s match {
-      case pattern(v) => Right(v)
-      case _          => Left(s"No match for $name")
+  trait Converter[T] {
+    def convert(src: String): Either[String, T]
+    def show: String
+  }
+
+  object Converter {
+    def apply[T](shw: String)(c: (String) => Either[String, T]): Converter[T] = new Converter[T] {
+      override def convert(src: String) = c(src)
+      override val show                 = shw
+    }
+    def fromTry[T](shw: String)(c: (String) => Try[T]): Converter[T] =
+      Converter(shw)(src =>
+        c(src) match {
+          case Success(v) => Right(v)
+          case Failure(_) => Left(s"Expected <$shw>, got '$src'")
+      })
+    def fromOption[T](shw: String)(c: (String) => Option[T]): Converter[T] =
+      Converter(shw)(src =>
+        c(src) match {
+          case Some(v) => Right(v)
+          case None    => Left(s"Expected <$shw>, got '$src'")
+      })
+  }
+
+  implicit val intConvert: Converter[Int] =
+    Converter.fromTry("integer")(src => Try(src.toInt))
+
+  implicit val stringConvert: Converter[String] =
+    Converter.fromOption("string")(src => Option(src))
+
+  implicit val pathConvert: Converter[java.nio.file.Path] =
+    Converter.fromTry("path")(src => Try(Paths.get(src)))
+
+  implicit val fileConvert: Converter[java.io.File] =
+    Converter.fromTry("file")(src => Try(new java.io.File(src)))
+
+  implicit def seqConvert[T](implicit base: Converter[T]): Converter[Seq[T]] =
+    Converter(base.show + ",...") { src =>
+      src.split(',').map(base.convert).foldLeft[Either[String, Seq[T]]](Right(Seq())) {
+        case (Right(res), Right(n)) => Right(res :+ n)
+        case (Right(_), Left(e))    => Left(e)
+        case (Left(e), _)           => Left(e)
+      }
+    }
+
+  implicit def readOpt[T](implicit base: Param[T]): Param[Option[T]] = Param { (name, args) =>
+    base.read(name, args) match {
+      case Ok(v, rs)    => Ok(Option(v), rs)
+      case Fail(es, rs) => Fail(es, rs)
     }
   }
 
-  trait Convert[T] {
-    def convert(src: String): Option[T]
+  implicit def read[T](implicit conv: Converter[T], format: Format): Param[T] = Param {
+    (name, args) =>
+      args.foldLeft[Result[T]](Fail[T](Seq(), List())) {
+        case (Ok(v, rs), s) => Ok(v, rs :+ s)
+        case (Fail(es, rs), s) =>
+          format.flag(name, s).map(conv.convert) match {
+            case Some(Right(v)) => Ok(v, rs)
+            case Some(Left(e))  => Fail(e +: es, rs :+ s)
+            case None           => Fail(es, rs :+ s)
+          }
+      } match {
+        case Ok(v, rs)    => Ok(v, rs)
+        case Fail(es, rs) => Fail(s"Unable to read parameter: $name" +: es, rs)
+      }
   }
 
-  object Convert {
-    def apply[T](c: (String) => Option[T]): Convert[T] = new Convert[T] {
-      override def convert(src: String): Option[T] = c(src)
+  trait Format {
+    def show(name: String, tpe: String): String
+    def pattern(name: String): Regex
+    def flag(name: String, s: String): Option[String] = {
+      val pat = pattern(name)
+      s match {
+        case pat(v) => Some(v)
+        case _      => None
+      }
     }
   }
 
-  implicit val intConvert: Convert[Int]       = Convert(src => Try(src.toInt).toOption)
-  implicit val stringConvert: Convert[String] = Convert(src => Option(src))
-
-  implicit def readOpt[T](implicit base: Read[T]): Read[Option[T]] = Read { (name, args) =>
-    val Result(v, r) = base.read(name)(args)
-    Result(Some(v), r)
+  implicit val defaultFormat: Format = new Format {
+    def show(name: String, tpe: String) = s"--$name=<$tpe>"
+    def pattern(name: String): Regex    = s"--$name=(\\S+)".r
   }
 
-  implicit def read[T](implicit conv: Convert[T]): Read[T] = Read { (name, args) =>
-    args.foldLeft[Result[T]](Result(None, List())) {
-      case (Result(Some(v), rs), s) => Result(Some(v), rs :+ s)
-      case (Result(None, rs), s) =>
-        flag(name, s).right.map(conv.convert) match {
-          case Right(Some(v)) => Result(Some(v), rs)
-          case _              => Result(None, rs :+ s)
-        }
+  sealed trait Result[T] {
+    def rest: Seq[String]
+    def errors: Seq[String] = Seq()
+  }
+  case class Ok[T](
+      value: T,
+      override val rest: Seq[String]
+  ) extends Result[T]
+  case class Fail[T](
+      override val errors: Seq[String],
+      override val rest: Seq[String]
+  ) extends Result[T]
+
+  trait Param[T] { self =>
+
+    def read(name: String, args: Seq[String]): Result[T]
+
+    def map[B](f: (T) => B): Param[B] = Param { (name, args) =>
+      self.read(name, args) match {
+        case Ok(v, rs)    => Ok(f(v), rs)
+        case Fail(es, rs) => Fail(es, rs)
+      }
     }
   }
 
-  case class Result[T](
-      value: Option[T],
-      rest: Seq[String]
-  )
+  object Param extends LabelledProductTypeClassCompanion[Param] {
 
-  trait Read[T] { self =>
-
-    def read(name: String)(args: Seq[String]): Result[T]
-
-    def map[B](f: (T) => B): Read[B] = Read { (name, args) =>
-      val Result(v, r) = self.read(name)(args)
-      Result(v.map(f), r)
-    }
-  }
-
-  object Read extends LabelledProductTypeClassCompanion[Read] {
-
-    def apply[T](f: (String, Seq[String]) => Result[T]): Read[T] = new Read[T] {
-      override def read(name: String)(args: Seq[String]): Result[T] = f(name, args)
+    def apply[T](f: (String, Seq[String]) => Result[T]): Param[T] = new Param[T] {
+      override def read(name: String, args: Seq[String]): Result[T] = f(name, args)
     }
 
-    object typeClass extends LabelledProductTypeClass[Read] {
+    object typeClass extends LabelledProductTypeClass[Param] {
 
-      override def product[H, T <: HList](name: String, rh: Read[H], rt: Read[T]): Read[H :: T] =
-        Read { (_, args) =>
-          println(s"prodRead: $name - $args")
-          val r1 @ Result(hv, hrs) = rh.read(name)(args)
-          val r2 @ Result(tv, trs) = rt.read(name)(hrs)
-          println(s"prodRead: $r1, $r2")
-          (hv, tv) match {
-            case (Some(hvv), Some(tvv)) => Result(Some(hvv :: tvv), trs)
-            case _                      => Result(None, List())
+      override def product[H, T <: HList](name: String,
+                                          rh: Param[H],
+                                          rt: Param[T]): Param[H :: T] =
+        Param { (_, args) =>
+          val r1 = rh.read(name, args)
+          val r2 = rt.read(name, r1.rest)
+          (r1, r2) match {
+            case (Ok(hv, _), Ok(tv, _)) => Ok(hv :: tv, r2.rest)
+            case _                      => Fail(r1.errors ++ r2.errors, r2.rest)
           }
         }
 
-      override def emptyProduct: Read[HNil] = Read { (name, args) =>
-        Result(Some(HNil), args)
+      override def emptyProduct: Param[HNil] = Param { (name, args) =>
+        Ok(HNil, args)
       }
 
-      override def project[F, G](instance: => Read[G], to: (F) => G, from: (G) => F): Read[F] =
+      override def project[F, G](instance: => Param[G], to: (F) => G, from: (G) => F): Param[F] =
         instance.map(from)
     }
   }
 
-  def parse[C](args: List[String])(implicit read: Read[C]) = {
-    read.read("")(args)
+  def parse[C](args: List[String])(implicit param: Param[C]) = {
+    param.read("", args)
   }
 
+  trait Help[T] {
+    def help(name: String): Seq[String]
+  }
+
+  implicit def reqHelp[T](implicit convert: Converter[T], format: Format): Help[T] =
+    new Help[T] {
+      override def help(name: String): Seq[String] = Seq(format.show(name, convert.show))
+    }
+
+  implicit def optHelp[T](implicit convert: Converter[T], format: Format): Help[Option[T]] =
+    new Help[Option[T]] {
+      override def help(name: String): Seq[String] = Seq(s"[${format.show(name, convert.show)}]")
+    }
+
+  object Help extends LabelledProductTypeClassCompanion[Help] {
+
+    object typeClass extends LabelledProductTypeClass[Help] {
+      override def product[H, T <: HList](name: String, hh: Help[H], th: Help[T]): Help[H :: T] = {
+        new Help[H :: T] {
+          override def help(n: String): Seq[String] = hh.help(name) ++ th.help(n)
+        }
+      }
+
+      override def emptyProduct: Help[HNil] = new Help[HNil] {
+        override def help(name: String): Seq[String] = Seq()
+      }
+
+      override def project[F, G](instance: => Help[G], to: (F) => G, from: (G) => F): Help[F] =
+        new Help[F] {
+          override def help(name: String): Seq[String] = instance.help(name)
+        }
+    }
+  }
+
+  def help[C](implicit help: Help[C]): Seq[String] = help.help("")
 }
