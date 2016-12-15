@@ -45,22 +45,31 @@ package object autoargs {
           case None    => Left(s"Expected <$shw>, got '$src'")
       })
 
-    implicit val intConvert: Converter[Int] =
-      Converter.fromTry("integer")(src => Try(src.toInt))
-
-    implicit val boolConvert: Converter[Boolean] =
-      Converter.fromTry("boolean")(src => Try(src.toBoolean))
-
-    implicit val stringConvert: Converter[String] =
+    implicit val stringConverter: Converter[String] =
       Converter.fromOption("string")(src => Option(src))
 
-    implicit val pathConvert: Converter[java.nio.file.Path] =
+    implicit val boolConverter: Converter[Boolean] =
+      Converter.fromTry("boolean")(src => Try(src.toBoolean))
+
+    implicit val intConverter: Converter[Int] =
+      Converter.fromTry("integer")(src => Try(src.toInt))
+
+    implicit val longConverter: Converter[Long] =
+      Converter.fromTry("long")(src => Try(src.toLong))
+
+    implicit val floatConverter: Converter[Float] =
+      Converter.fromTry("float")(src => Try(src.toFloat))
+
+    implicit val doubleConverter: Converter[Double] =
+      Converter.fromTry("double")(src => Try(src.toDouble))
+
+    implicit val pathConverter: Converter[java.nio.file.Path] =
       Converter.fromTry("path")(src => Try(Paths.get(src)))
 
-    implicit val fileConvert: Converter[java.io.File] =
+    implicit val fileConverter: Converter[java.io.File] =
       Converter.fromTry("file")(src => Try(new java.io.File(src)))
 
-    implicit def seqConvert[T](implicit base: Converter[T]): Converter[Seq[T]] =
+    implicit def seqConverter[T](implicit base: Converter[T]): Converter[Seq[T]] =
       Converter(base.show + ",...") { src =>
         src.split(',').map(base.convert).foldLeft[Either[String, Seq[T]]](Right(Seq())) {
           case (Right(res), Right(n)) => Right(res :+ n)

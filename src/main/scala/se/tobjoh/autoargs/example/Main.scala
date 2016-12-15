@@ -5,8 +5,10 @@ import se.tobjoh.autoargs._
 object Main extends App {
 
   case class Config(
+      string: String,
       num: Int,
       flag: Boolean,
+      double: Double,
       list: Seq[Int],
       path: java.nio.file.Path,
       maybe: Option[Int]
@@ -14,7 +16,13 @@ object Main extends App {
 
   val Good(config, rest) =
     parse[Config](
-      List("--num=123", "--flag=true", "--list=1,23,2", "--path=/path/to/path", "an arg"))
+      List("--string=foo",
+           "--num=123",
+           "--flag=true",
+           "--double=1.5e3",
+           "--list=1,23,2",
+           "--path=/path/to/path",
+           "an arg"))
 
   println(s"Config: $config")
   println(s"Rest: $rest")
