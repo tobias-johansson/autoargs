@@ -32,3 +32,11 @@ res3: String =
 --bar=<integer,...>
 [--baz=<boolean>]
 ```
+
+## Future work
+
+Ideas:
+- Fail on unrecognized arguments
+- Support argument forms like `-f <value>`
+- Support mixed argument forms using `@@` tags or similar
+- Add argument description strings using singleton types
