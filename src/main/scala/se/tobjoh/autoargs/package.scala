@@ -26,23 +26,23 @@ package object autoargs {
 
   trait Converter[T] {
     def convert(src: String): Either[String, T]
-    def show: String
+    def help: String
   }
 
   object Converter {
-    def apply[T](shw: String)(c: (String) => Either[String, T]): Converter[T] = new Converter[T] {
+    def apply[T](hlp: String)(c: (String) => Either[String, T]): Converter[T] = new Converter[T] {
       override def convert(src: String) = c(src)
-      override val show                 = shw
+      override val help                 = hlp
     }
 
-    def fromTry[T](shw: String)(c: (String) => Try[T]): Converter[T] =
-      Converter.fromOption(shw)(src => c(src).toOption)
+    def fromTry[T](hlp: String)(c: (String) => Try[T]): Converter[T] =
+      Converter.fromOption(hlp)(src => c(src).toOption)
 
-    def fromOption[T](shw: String)(c: (String) => Option[T]): Converter[T] =
-      Converter(shw)(src =>
+    def fromOption[T](hlp: String)(c: (String) => Option[T]): Converter[T] =
+      Converter(hlp)(src =>
         c(src) match {
           case Some(v) => Right(v)
-          case None    => Left(s"Expected <$shw>, got '$src'")
+          case None    => Left(s"Expected: <$hlp>, found: $src")
       })
 
     implicit val stringConverter: Converter[String] =
@@ -70,7 +70,7 @@ package object autoargs {
       Converter.fromTry("file")(src => Try(new java.io.File(src)))
 
     implicit def seqConverter[T](implicit base: Converter[T]): Converter[Seq[T]] =
-      Converter(base.show + ",...") { src =>
+      Converter(base.help + ",...") { src =>
         src.split(',').map(base.convert).foldLeft[Either[String, Seq[T]]](Right(Seq())) {
           case (Right(res), Right(n)) => Right(res :+ n)
           case (Right(_), Left(e))    => Left(e)
@@ -80,7 +80,7 @@ package object autoargs {
   }
 
   trait Format {
-    def show(name: String, tpe: String): String
+    def help(name: String, tpe: String): String
 
     def pattern(name: String): Regex
 
@@ -95,7 +95,7 @@ package object autoargs {
 
   object Format {
     implicit val defaultFormat: Format = new Format {
-      def show(name: String, tpe: String) = s"--$name=<$tpe>"
+      def help(name: String, tpe: String) = s"--$name=<$tpe>"
       def pattern(name: String): Regex    = s"--$name=(\\S+)".r
     }
   }
@@ -116,12 +116,11 @@ package object autoargs {
       override def read(name: String, args: Seq[String]): Result[T] = f(name, args)
     }
 
-    implicit def optReader[T](implicit base: Reader[T]): Reader[Option[T]] = Reader {
-      (name, args) =>
-        base.read(name, args) match {
-          case Good(v, rs) => Good(Option(v), rs)
-          case Bad(es, rs) => Good(None, rs)
-        }
+    implicit def optReader[T](implicit base: Reader[T]): Reader[Option[T]] = Reader { (name, args) =>
+      base.read(name, args) match {
+        case Good(v, rs) => Good(Option(v), rs)
+        case Bad(es, rs) => Good(None, rs)
+      }
     }
 
     implicit def reqReader[T](implicit conv: Converter[T], format: Format): Reader[T] =
@@ -136,15 +135,13 @@ package object autoargs {
             }
         } match {
           case Good(v, rs) => Good(v, rs)
-          case Bad(es, rs) => Bad(s"Unable to read parameter: $name" +: es, rs)
+          case Bad(es, rs) => Bad(s"Unable to read argument: ${format.help(name, conv.help)}" +: es, rs)
         }
       }
 
     object typeClass extends LabelledProductTypeClass[Reader] {
 
-      override def product[H, T <: HList](name: String,
-                                          rh: Reader[H],
-                                          rt: Reader[T]): Reader[H :: T] =
+      override def product[H, T <: HList](name: String, rh: Reader[H], rt: Reader[T]): Reader[H :: T] =
         Reader { (_, args) =>
           val r1 = rh.read(name, args)
           val r2 = rt.read(name, r1.rest)
@@ -154,7 +151,7 @@ package object autoargs {
           }
         }
 
-      override def emptyProduct: Reader[HNil] = Reader { (name, args) =>
+      override def emptyProduct: Reader[HNil] = Reader { (_, args) =>
         Good(HNil, args)
       }
 
@@ -173,14 +170,15 @@ package object autoargs {
 
   object Help extends LabelledProductTypeClassCompanion[Help] {
 
-    implicit def reqHelp[T](implicit convert: Converter[T], format: Format): Help[T] =
+    implicit def reqHelp[T](implicit converter: Converter[T], format: Format): Help[T] =
       new Help[T] {
-        override def help(name: String): Seq[String] = Seq(format.show(name, convert.show))
+        override def help(name: String): Seq[String] = Seq(format.help(name, converter.help))
       }
 
-    implicit def optHelp[T](implicit convert: Converter[T], format: Format): Help[Option[T]] =
+    implicit def optHelp[T](implicit converter: Converter[T], format: Format): Help[Option[T]] =
       new Help[Option[T]] {
-        override def help(name: String): Seq[String] = Seq(s"[${format.show(name, convert.show)}]")
+        override def help(name: String): Seq[String] =
+          Seq(s"[${format.help(name, converter.help)}]")
       }
 
     object typeClass extends LabelledProductTypeClass[Help] {
