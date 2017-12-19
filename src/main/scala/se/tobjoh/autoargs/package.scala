@@ -9,19 +9,15 @@ import scala.util.Try
 
 package object autoargs {
 
-  sealed trait Result[T] {
-    def rest: Seq[String]
-    def errors: Seq[String] = Seq()
-  }
-
+  sealed trait Result[T]
   case class Good[T](
       value: T,
-      override val rest: Seq[String]
+      rest: Seq[String]
   ) extends Result[T]
 
   case class Bad[T](
-      override val errors: Seq[String],
-      override val rest: Seq[String]
+      errors: Seq[String],
+      rest: Seq[String]
   ) extends Result[T]
 
   trait Converter[T] {
@@ -143,16 +139,19 @@ package object autoargs {
 
       override def product[H, T <: HList](name: String, rh: Reader[H], rt: Reader[T]): Reader[H :: T] =
         Reader { (_, args) =>
-          val r1 = rh.read(name, args)
-          val r2 = rt.read(name, r1.rest)
-          (r1, r2) match {
-            case (Good(hv, _), Good(tv, _)) => Good(hv :: tv, r2.rest)
-            case _                          => Bad(r1.errors ++ r2.errors, r2.rest)
+          rh.read(name, args) match {
+            case Bad(err, rest) => Bad(err, rest)
+            case Good(v1, r1) =>
+              rt.read(name, r1) match {
+                case Bad(err, rest) => Bad(err, rest)
+                case Good(v2, r2)   => Good(v1 :: v2, r2)
+              }
           }
         }
 
       override def emptyProduct: Reader[HNil] = Reader { (_, args) =>
-        Good(HNil, args)
+        if (args.isEmpty) Good(HNil, args)
+        else Bad(args.map(a => s"Unrecognized argument: $a"), Seq())
       }
 
       override def project[F, G](instance: => Reader[G], to: (F) => G, from: (G) => F): Reader[F] =

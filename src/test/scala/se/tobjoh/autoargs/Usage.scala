@@ -86,7 +86,7 @@ class Usage extends FreeSpec with Matchers {
       Bad(Seq("Unable to read argument: --size=<integer>"), Seq())
 
     parse[Config](List("--size=123")) shouldBe
-      Bad(Seq("Unable to read argument: --name=<string>"), Seq())
+      Bad(Seq("Unable to read argument: --name=<string>"), Seq("--size=123"))
 
     parse[Config](List()) shouldBe
       Bad(Seq(
@@ -113,6 +113,18 @@ class Usage extends FreeSpec with Matchers {
 
     parse[Config](List("--vals=9,67,3")) shouldBe
       Good(Config(vals = Seq(9, 67, 3)), Seq())
+  }
+
+  "Additional args results in failure" in {
+
+    case class Config(str: String)
+
+    parse[Config](List("--str=hi", "--foo=bar", "--baz=1")) shouldBe
+      Bad(Seq(
+            "Unrecognized argument: --foo=bar",
+            "Unrecognized argument: --baz=1"
+          ),
+          Seq())
   }
 
   "Argument help is generated" in {
